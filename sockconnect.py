@@ -57,7 +57,7 @@ TRACEPOINT_PROBE(syscalls, sys_enter_connect)
     struct sockaddr *sap = args->uservaddr;
     
     u32 tid = bpf_get_current_pid_tgid();
-
+    u32 pid = bpf_get_current_pid_tgid() >> 32;
 
     FILTER_PID    
 
