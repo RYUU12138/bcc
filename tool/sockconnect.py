@@ -45,7 +45,9 @@ struct ipv4_data_t {
 BPF_PERF_OUTPUT(ipv4_events);
 
 struct ipv6_data_t {
+    u64 ts_us;
     u32 pid;
+    u32 uid;
     unsigned __int128 addr;
     u16 port;
     char task[TASK_COMM_LEN];
@@ -90,12 +92,12 @@ TRACEPOINT_PROBE(syscalls, sys_exit_connect)
     if(sap->sa_family == AF_INET)
     {
         struct sockaddr_in * s = (struct sockaddr_in *)sap;
-
         struct ipv4_data_t data4 = {.pid = pid};
 
-        bpf_get_current_comm(&data4.task, sizeof(data4.task));
-        data4.port = (s->sin_port >> 8) | ((s->sin_port <<8) & 0xff00 );
         data4.addr = s->sin_addr.s_addr;
+        data4.port = (s->sin_port >> 8) | ((s->sin_port <<8) & 0xff00 );
+        bpf_get_current_comm(&data4.task, sizeof(data4.task));
+        
 
         ipv4_events.perf_submit(args, &data4, sizeof(data4));
 
@@ -104,12 +106,11 @@ TRACEPOINT_PROBE(syscalls, sys_exit_connect)
         struct sockaddr_in6 * s6 = (struct sockaddr_in6 *)sap;
         struct ipv6_data_t data6 = {.pid = pid};
     
-        
-        bpf_get_current_comm(&data6.task, sizeof(data6.task));   
+        bpf_probe_read_user(&data6.addr, sizeof(data6.addr),s6->sin6_addr.in6_u.u6_addr32);
         data6.port = (s6->sin6_port >> 8) | ((s6->sin6_port <<8) & 0xff00 );
-        bpf_probe_read_kernel(&data6.addr, sizeof(data6.addr),s6->sin6_addr.in6_u.u6_addr32);
+        bpf_get_current_comm(&data6.task, sizeof(data6.task));   
         
-        
+           
         ipv6_events.perf_submit(args, &data6, sizeof(data6));
     }
 
@@ -144,17 +145,17 @@ def print_ipv4_event(cpu, data, size):
     event = b["ipv4_events"].event(data)
 
     addr = inet_ntop(AF_INET, pack("I", event.addr)).encode()
-    printb(b"%-10d %-12.12s %-16.16s %-10d " % (event.pid, event.task, addr, event.port))
+    printb(b"%-10d %-12.12s %-32.32s %-10d " % (event.pid, event.task, addr, event.port))
 
 def print_ipv6_event(cpu, data, size):
     event = b["ipv6_events"].event(data)
 
     addr = inet_ntop(AF_INET6, event.addr).encode()
-    printb(b"%-10d %-12.12s %-16.16s %-10d " % (event.pid, event.task, addr, event.port))
+    printb(b"%-10d %-12.12s %-32.32s %-10d " % (event.pid, event.task, addr, event.port))
     
     
 
-print("%-10s %-12s %-16s %-10s " % ("PID", "COMM", "ADDRESS", "PORT"))
+print("%-10s %-12s %-32s %-10s " % ("PID", "COMM", "ADDRESS", "PORT"))
 
 
 # read events
