@@ -38,9 +38,9 @@ struct ipv4_data_t {
     char name[32];
     u32 pid;
     u32 uid;
-    u32 daddr;
+    u32 addr;
     u64 ip;
-    u16 dport;
+    u16 port;
     char task[TASK_COMM_LEN];
 };
 BPF_PERF_OUTPUT(ipv4_events);
@@ -51,61 +51,13 @@ struct ipv6_data_t {
     u32 pid;
     u32 uid;
     u64 ip;
-    u16 dport;
+    u16 port;
     char task[TASK_COMM_LEN];
-    unsigned __int128 daddr;
+    unsigned __int128 addr;
 };
 BPF_PERF_OUTPUT(ipv6_events);
 
-
-
-/*
-int trace_udprecv(struct pt_regs *ctx,struct sock *sk, struct msghdr *msg, size_t len, int noblock, int flags, int *addr_len)
-{
-  
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u32 pid = pid_tgid >> 32;
-
-    
-    FILTER_PID
-
-    
-    u32 uid = bpf_get_current_uid_gid();
-
-    FILTER_UID
-
-    u16 dport = sk->__sk_common.skc_dport;
-    
-
-    
-    u32 sa_family = sk->__sk_common.skc_family;
-    if (sa_family == 2) {
-        struct ipv4_data_t data4 = {.pid = pid};
-
-        data4.uid = bpf_get_current_uid_gid();
-        data4.daddr = sk->__sk_common.skc_daddr;
-        data4.dport = ntohs(dport);
-        bpf_get_current_comm(&data4.task, sizeof(data4.task));
-        bpf_probe_read_kernel(&data4.name, sizeof(data4.name), sk->__sk_common.skc_prot->name);
-        
-        ipv4_events.perf_submit(ctx, &data4, sizeof(data4));
-    } else if(sa_family == 10){
-        struct ipv6_data_t data6 = {.pid = pid};
-
-        
-        data6.uid = bpf_get_current_uid_gid();
-        bpf_probe_read_kernel(&data6.name, sizeof(data6.name), sk->__sk_common.skc_prot->name);
-        bpf_probe_read_kernel(&data6.daddr, sizeof(data6.daddr), sk->__sk_common.skc_v6_daddr.in6_u.u6_addr32);
-        data6.dport = ntohs(dport);
-        bpf_get_current_comm(&data6.task, sizeof(data6.task));
-        
-        ipv6_events.perf_submit(ctx, &data6, sizeof(data6));
-    }
-
-    return 0;
-}
-*/
-    
+ 
 TRACEPOINT_PROBE(syscalls, sys_enter_recvfrom) 
 {
     u16 port;   
@@ -118,6 +70,8 @@ TRACEPOINT_PROBE(syscalls, sys_enter_recvfrom)
     FILTER_PID    
 
     u32 uid = bpf_get_current_uid_gid();
+
+    FILTER_UID
  
     if(sa->sa_family == AF_INET)
     {
@@ -126,8 +80,10 @@ TRACEPOINT_PROBE(syscalls, sys_enter_recvfrom)
         struct ipv4_data_t data4 = {.pid = pid, .uid = uid};
 
         bpf_get_current_comm(&data4.task, sizeof(data4.task));
-        data4.dport = (s->sin_port >> 8) | ((s->sin_port <<8) & 0xff00 );
-        data4.daddr = s->sin_addr.s_addr;
+        port = s->sin_port;
+        data4.port = ntohs(port);
+        data4.addr = s->sin_addr.s_addr;
+        strcpy(data4.name, "UDP");
 
         ipv4_events.perf_submit(args, &data4, sizeof(data4));
 
@@ -137,12 +93,60 @@ TRACEPOINT_PROBE(syscalls, sys_enter_recvfrom)
         struct ipv6_data_t data6 = {.pid = pid, .uid = uid};
     
         
-        bpf_get_current_comm(&data6.task, sizeof(data6.task));   
-        data6.dport = (s6->sin6_port >> 8) | ((s6->sin6_port <<8) & 0xff00 );
-        bpf_probe_read_user(&data6.daddr, sizeof(data6.daddr),s6->sin6_addr.in6_u.u6_addr32);
+        bpf_get_current_comm(&data6.task, sizeof(data6.task));  
+        port = s6->sin6_port;
+        data6.port = ntohs(port); 
+        //data6.port = (s6->sin6_port >> 8) | ((s6->sin6_port <<8) & 0xff00 );
+        bpf_probe_read_user(&data6.addr, sizeof(data6.addr),s6->sin6_addr.in6_u.u6_addr32);
+        strcpy(data6.name, "UDPv6");
         
         
         ipv6_events.perf_submit(args, &data6, sizeof(data6));
+    }
+
+    return 0;
+} 
+
+int kprobe__tcp_recvmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg, size_t len, int nonblock, int flags, int *addr_len)
+{
+    u16 port;   
+    u32 pid;
+    
+    
+    pid = bpf_get_current_pid_tgid() >> 32;
+
+
+    FILTER_PID    
+
+    u32 uid = bpf_get_current_uid_gid();
+ 
+    FILTER_UID
+
+    port = sk->__sk_common.skc_dport;
+    
+
+    
+    u32 sa_family = sk->__sk_common.skc_family;
+    if (sa_family == 2) {
+        struct ipv4_data_t data4 = {.pid = pid, .uid = uid};
+
+        
+        data4.addr = sk->__sk_common.skc_daddr;
+        data4.port = ntohs(port);
+        bpf_get_current_comm(&data4.task, sizeof(data4.task));
+        bpf_probe_read_kernel(&data4.name, sizeof(data4.name), sk->__sk_common.skc_prot->name);
+        
+        ipv4_events.perf_submit(ctx, &data4, sizeof(data4));
+    } else if(sa_family == 10){
+        struct ipv6_data_t data6 = {.pid = pid, .uid = uid};
+
+        
+        bpf_probe_read_kernel(&data6.name, sizeof(data6.name), sk->__sk_common.skc_prot->name);
+        bpf_probe_read_kernel(&data6.addr, sizeof(data6.addr), sk->__sk_common.skc_v6_daddr.in6_u.u6_addr32);
+        data6.port = ntohs(port);
+        bpf_get_current_comm(&data6.task, sizeof(data6.task));
+        
+        ipv6_events.perf_submit(ctx, &data6, sizeof(data6));
     }
 
     return 0;
@@ -164,28 +168,22 @@ else:
 
 # initialize BPF
 b = BPF(text=bpf_text)
-# b.attach_kprobe(event="udp_recvmsg", fn_name="trace_udprecv")
-# b.attach_kprobe(event="__skb_recv_datagram", fn_name="trace_udprecv")
-# b.attach_kprobe(event="__skb_recv_udp", fn_name="trace_udprecv")
-# b.attach_kprobe(event="udp_v4_get_port", fn_name="trace_udprecv")
-# b.attach_kprobe(event="syscalls:sys_enter_recvfrom", fn_name="trace_udprecv")
 
-# b.attach_kprobe(event="__skb_try_recv_from_queue", fn_name="trace_udprecv")
 
 # process event
 def print_ipv4_event(cpu, data, size):
     event = b["ipv4_events"].event(data)
     
-    dest_ip = inet_ntop(AF_INET, pack("I", event.daddr)).encode()
+    dest_ip = inet_ntop(AF_INET, pack("I", event.addr)).encode()
 
-    printb(b"%-6d %-7d %-15.12s %-6.6s %-32.32s %-6d " % (event.uid, event.pid,event.task, event.name, dest_ip, event.dport))
+    printb(b"%-6d %-7d %-15.12s %-6.6s %-32.32s %-6d " % (event.uid, event.pid,event.task, event.name, dest_ip, event.port))
 
 def print_ipv6_event(cpu, data, size):
     event = b["ipv6_events"].event(data)
 
-    dest_ip = inet_ntop(AF_INET6, event.daddr).encode()
+    dest_ip = inet_ntop(AF_INET6, event.addr).encode()
 
-    printb(b"%-6d %-7d %-15.12s %-6.6s %-32.32s %-6d" % (event.uid, event.pid,event.task, event.name, dest_ip, event.dport))
+    printb(b"%-6d %-7d %-15.12s %-6.6s %-32.32s %-6d" % (event.uid, event.pid,event.task, event.name, dest_ip, event.port))
     
     
 
